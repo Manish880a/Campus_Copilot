@@ -1,31 +1,40 @@
 """
 memory.py
 ---------
-Very small session-memory manager. Streamlit already keeps
-`st.session_state` alive for the duration of a user's session, so
-this class just gives that state a clean, agent-friendly interface:
+Small session-memory manager. Each chat thread gets its own plain dict
+(stored inside st.session_state["chats"][chat_id] by app.py), and this
+class just gives that dict a clean, agent-friendly interface:
 
     - conversation turns (for follow-up questions like "explain that more")
     - the last retrieved context (so a follow-up doesn't need to re-embed
       an near-identical query)
     - any facts the deadline agent has extracted, so the router/Q&A agent
-      can reference them later in the same session
+      can reference them later in the same chat
+
+Each assistant turn can optionally carry:
+    - agent: which specialist answered (for the colored badge)
+    - query: the original user message that produced it (needed so the
+      "Regenerate" button can re-run the same question)
 """
 
 
 class SessionMemory:
     def __init__(self, state: dict):
-        # `state` is st.session_state (or a plain dict in tests)
+        # `state` is a plain dict scoped to one chat thread (or a plain
+        # dict in tests) - NOT necessarily st.session_state itself.
         self.state = state
-        self.state.setdefault("history", [])          # list of {"role", "text"}
+        self.state.setdefault("history", [])          # list of turn dicts
         self.state.setdefault("last_context", [])      # last retrieved chunks
         self.state.setdefault("last_agent", None)       # which agent answered last
         self.state.setdefault("known_deadlines", [])    # facts found so far
 
-    def add_turn(self, role: str, text: str, agent: str = None):
-        # `agent` is the short label (QA / QUIZ / DEADLINE) for assistant
-        # turns, so the UI can re-render the right badge/icon on history replay.
-        self.state["history"].append({"role": role, "text": text, "agent": agent})
+    def add_turn(self, role: str, text: str, agent: str = None, query: str = None):
+        turn = {"role": role, "text": text}
+        if agent is not None:
+            turn["agent"] = agent
+        if query is not None:
+            turn["query"] = query
+        self.state["history"].append(turn)
 
     def get_recent_history(self, n: int = 6):
         """Last n turns, formatted for inclusion in an LLM prompt."""
