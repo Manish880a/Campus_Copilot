@@ -6,15 +6,13 @@ vector database:
 
     python ingest.py
 
-Steps:
-    1. Load every .pdf / .txt file from the data/ folder
-    2. Split each document into overlapping text chunks
-    3. Embed the chunks locally with sentence-transformers
-    4. Store the chunks + embeddings + metadata in a persistent
-       ChromaDB collection
+Uses chromadb.PersistentClient so the index is actually written to disk
+at CHROMA_PERSIST_DIR - the app opens that same path, so what you build
+here is what the app will actually search.
 """
 import os
 import glob
+
 import chromadb
 from chromadb.utils import embedding_functions
 from pypdf import PdfReader
@@ -40,7 +38,7 @@ def load_text_from_file(path: str) -> str:
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     """Simple sliding-window character chunker with overlap."""
-    text = " ".join(text.split())  # normalize whitespace
+    text = " ".join(text.split())
     chunks = []
     start = 0
     while start < len(text):
@@ -53,7 +51,6 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 def build_index():
     client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
 
-    # Local, free embedding function (downloads model once, then runs offline)
     embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=EMBEDDING_MODEL
     )
@@ -71,7 +68,6 @@ def build_index():
     files = glob.glob(os.path.join(DATA_DIR, "*.pdf")) + glob.glob(
         os.path.join(DATA_DIR, "*.txt")
     )
-
     if not files:
         print(f"No .pdf/.txt files found in {DATA_DIR}/. Add your syllabus, "
               f"handbook, previous papers, etc. and re-run.")
@@ -88,7 +84,6 @@ def build_index():
             all_docs.append(chunk)
             all_meta.append({"source": fname, "chunk_index": i})
 
-    # Chroma has a batch-size limit on some backends; add in batches of 100
     batch = 100
     for i in range(0, len(all_docs), batch):
         collection.add(

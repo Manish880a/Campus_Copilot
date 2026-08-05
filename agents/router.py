@@ -10,10 +10,10 @@ from config import ROUTER_MODEL
 
 ROUTER_SYSTEM_PROMPT = """You are a routing classifier for a college assistant.
 Classify the user's message into exactly ONE of these labels:
-
 - QA: factual questions about course content, syllabus, handbook rules,
-  policies, previous exam papers, or anything else that should be answered
-  by looking up the college documents.
+  policies, previous exam papers, general knowledge questions, or anything
+  else that should be answered by looking up the college documents (or the
+  web, if the documents don't cover it).
 - QUIZ: the user wants practice questions, a quiz, MCQs, or to be tested
   on a topic.
 - DEADLINE: the user is asking about due dates, submission dates, exam
@@ -30,4 +30,4 @@ def route(query: str) -> str:
     for valid in ("QA", "QUIZ", "DEADLINE"):
         if valid in label:
             return valid
-    return "QA"  # safe default
+    return "QA"

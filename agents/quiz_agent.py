@@ -17,16 +17,14 @@ provided document excerpts, write a short quiz for the student.
 
 
 def answer(query: str, memory) -> str:
-    hits = retrieve(query)
+    collection = memory.get_vectordb()
+    hits = retrieve(query, collection) if collection else []
     memory.set_last_context(hits)
 
     if not hits:
         return "I couldn't find any indexed documents to build a quiz from. Has ingest.py been run yet?"
 
-    context = "\n\n".join(
-        f"[Source: {h['source']}]\n{h['text']}" for h in hits
-    )
-
+    context = "\n\n".join(f"[Source: {h['source']}]\n{h['text']}" for h in hits)
     user_prompt = f"""Document excerpts:
 {context}
 

@@ -1,32 +1,48 @@
 """
 memory.py
 ---------
-Small session-memory manager. Each chat thread gets its own plain dict
-(stored inside st.session_state["chats"][chat_id] by app.py), and this
-class just gives that dict a clean, agent-friendly interface:
-
-    - conversation turns (for follow-up questions like "explain that more")
-    - the last retrieved context (so a follow-up doesn't need to re-embed
-      an near-identical query)
-    - any facts the deadline agent has extracted, so the router/Q&A agent
-      can reference them later in the same chat
-
-Each assistant turn can optionally carry:
-    - agent: which specialist answered (for the colored badge)
-    - query: the original user message that produced it (needed so the
-      "Regenerate" button can re-run the same question)
+Per-chat conversation memory, plus a cached, persistent connection to
+the shared ChromaDB collection - one vector store shared by every chat
+thread (built by ingest.py); only the conversation history is per-chat.
 """
+import streamlit as st
+import chromadb
+from chromadb.utils import embedding_functions
+
+from config import CHROMA_PERSIST_DIR, COLLECTION_NAME, EMBEDDING_MODEL
+
+
+@st.cache_resource
+def load_vectordb():
+    """Open the persistent ChromaDB collection built by ingest.py.
+    Returns None if ingest.py hasn't been run yet (or the collection is
+    missing) rather than raising, so the app can still start and agents
+    can fall back to a web search or an ungrounded answer.
+
+    Note: this is cached for the life of the running app process. If you
+    run ingest.py again while the app is already open, restart the app
+    (or use the "Clear cache" option) to pick up the new index."""
+    client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+    embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name=EMBEDDING_MODEL
+    )
+    try:
+        return client.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
+    except Exception:
+        return None
 
 
 class SessionMemory:
     def __init__(self, state: dict):
-        # `state` is a plain dict scoped to one chat thread (or a plain
-        # dict in tests) - NOT necessarily st.session_state itself.
         self.state = state
-        self.state.setdefault("history", [])          # list of turn dicts
-        self.state.setdefault("last_context", [])      # last retrieved chunks
-        self.state.setdefault("last_agent", None)       # which agent answered last
-        self.state.setdefault("known_deadlines", [])    # facts found so far
+        self.state.setdefault("history", [])
+        self.state.setdefault("last_context", [])
+        self.state.setdefault("last_agent", None)
+        self.state.setdefault("known_deadlines", [])
+        self.state.setdefault("title", None)
+
+    def get_vectordb(self):
+        return load_vectordb()
 
     def add_turn(self, role: str, text: str, agent: str = None, query: str = None):
         turn = {"role": role, "text": text}
@@ -37,7 +53,6 @@ class SessionMemory:
         self.state["history"].append(turn)
 
     def get_recent_history(self, n: int = 6):
-        """Last n turns, formatted for inclusion in an LLM prompt."""
         return self.state["history"][-n:]
 
     def set_last_context(self, chunks: list):

@@ -2,7 +2,7 @@
 agents/deadline_agent.py
 --------------------------
 Finds dates/deadlines mentioned in the retrieved chunks and also
-remembers deadlines it has already surfaced this session, so a later
+remembers deadlines it has already surfaced this chat, so a later
 "what's still due?" question benefits from earlier lookups too.
 """
 from llm import chat
@@ -18,16 +18,14 @@ submissions.
 
 
 def answer(query: str, memory) -> str:
-    hits = retrieve(query)
+    collection = memory.get_vectordb()
+    hits = retrieve(query, collection) if collection else []
     memory.set_last_context(hits)
 
     if not hits:
         return "I couldn't find any indexed documents to check for deadlines. Has ingest.py been run yet?"
 
-    context = "\n\n".join(
-        f"[Source: {h['source']}]\n{h['text']}" for h in hits
-    )
-
+    context = "\n\n".join(f"[Source: {h['source']}]\n{h['text']}" for h in hits)
     known = memory.state.get("known_deadlines", [])
     known_text = "\n".join(f"- {d}" for d in known) if known else "(none yet)"
 
@@ -40,8 +38,5 @@ Deadlines already found earlier this session:
 Student question: {query}"""
 
     result = chat(DEADLINE_SYSTEM_PROMPT, user_prompt, temperature=0.2)
-
-    # Cache a short summary so future deadline questions in this session
-    # can reference it without re-reading everything.
     memory.add_deadline(f"Q: {query} -> {result[:200]}")
     return result
