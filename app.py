@@ -11,8 +11,16 @@ Flow per message:
     2. Router agent labels it QA / QUIZ / DEADLINE
     3. The matching sub-agent retrieves context from ChromaDB and
        calls Groq to generate a reply
-    4. Reply + label are stored in session memory and shown in the chat
+    4. Reply + label + originating query are stored in the active chat's
+       memory and shown in the chat
+
+Chats: the sidebar supports multiple chat threads (like a normal chat
+app). Each thread has its own independent memory. "New Chat" starts a
+fresh thread; clicking a past thread in the list switches to it.
 """
+import json
+import uuid
+
 import streamlit as st
 
 from memory import SessionMemory
@@ -51,6 +59,38 @@ DARK_PALETTE = {
 st.session_state.setdefault("dark_mode", False)
 p = DARK_PALETTE if st.session_state.dark_mode else LIGHT_PALETTE
 
+# ---------------------------------------------------------------------------
+# Multi-chat state: a dict of chat_id -> chat state dict, plus an ordered
+# list of chat_ids (newest first) for the sidebar list.
+# ---------------------------------------------------------------------------
+st.session_state.setdefault("chats", {})
+st.session_state.setdefault("chat_order", [])
+st.session_state.setdefault("current_chat_id", None)
+
+
+def _create_chat() -> str:
+    cid = str(uuid.uuid4())
+    st.session_state["chats"][cid] = {
+        "title": None,
+        "history": [],
+        "last_context": [],
+        "last_agent": None,
+        "known_deadlines": [],
+    }
+    st.session_state["chat_order"].insert(0, cid)
+    st.session_state["current_chat_id"] = cid
+    return cid
+
+
+if (
+    not st.session_state["current_chat_id"]
+    or st.session_state["current_chat_id"] not in st.session_state["chats"]
+):
+    _create_chat()
+
+current_chat_id = st.session_state["current_chat_id"]
+memory = SessionMemory(st.session_state["chats"][current_chat_id])
+
 CUSTOM_CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -85,18 +125,35 @@ html, body {{
     background-image: linear-gradient(90deg, rgba({p['glow']}, 0.9), transparent);
 }}
 
-/* Sidebar expand/collapse arrow - force a visible icon color in both themes */
-[data-testid="stSidebarCollapsedControl"] svg,
-[data-testid="stSidebarCollapsedControl"] button,
-[data-testid="stHeader"] svg,
-[data-testid="baseButton-headerNoPadding"] svg {{
-    color: {p['ink']} !important;
-    fill: {p['ink']} !important;
-}}
-[data-testid="stSidebarCollapsedControl"] {{
+/* Sidebar collapse/expand icon - actual Streamlit collapse button structure */
+[data-testid="stSidebarCollapseButton"] button {{
     background-color: {p['surface']} !important;
     border: 1px solid {p['border']} !important;
     border-radius: 8px !important;
+    color: transparent !important;
+    font-size: 0 !important;
+    width: 2.4rem !important;
+    height: 2.4rem !important;
+    padding: 0 !important;
+    position: relative !important;
+}}
+[data-testid="stSidebarCollapseButton"] button::before {{
+    content: "<";
+    position: absolute !important;
+    inset: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: {p['ink']} !important;
+    font-size: 1rem !important;
+    text-indent: 0 !important;
+}}
+[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarCollapseButton"] button::before {{
+    content: ">";
+}}
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"] button > span {{
+    display: none !important;
 }}
 
 /* Sticky footer bar behind the chat input - blend it into the main background */
@@ -170,6 +227,40 @@ html, body {{
     box-shadow: 0 0 10px rgba({p['glow']}, 0.55);
 }}
 
+/* Copy / regenerate action row under each assistant message - icon-only,
+   compact square buttons */
+.msg-copy-btn {{
+    font-size: 0.95rem;
+    line-height: 1;
+    background-color: transparent;
+    color: {p['ink']};
+    border: 1px solid rgba({p['glow']}, 0.6);
+    border-radius: 6px;
+    width: 2.1rem;
+    height: 2.1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, background-color 0.2s ease;
+    margin-top: 0.35rem;
+}}
+.msg-copy-btn:hover {{
+    background-color: rgba({p['glow']}, 0.12);
+    box-shadow: 0 0 14px rgba({p['glow']}, 0.5);
+    border: 1px solid rgba({p['glow']}, 0.9);
+}}
+/* Regenerate is a real st.button - match the same compact icon-only size */
+[class*="st-key-msg_actions"] .stButton > button {{
+    width: 2.1rem;
+    height: 2.1rem;
+    padding: 0 !important;
+    font-size: 0.95rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}}
+
 /* Sidebar - control panel */
 [data-testid="stSidebar"] {{
     background-color: {p['sidebar']};
@@ -191,48 +282,36 @@ html, body {{
     color: {p['text']};
 }}
 
-/* Dark mode toggle - real data-testid is "stCheckbox" (confirmed via DevTools),
-   not "stToggle" as previously guessed. */
-[data-testid="stCheckbox"] {{
-    background-color: {p['surface']} !important;
-    border: 1.5px solid {p['border']} !important;
-    border-radius: 999px !important;
-    padding: 0.35rem 0.9rem !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    width: fit-content !important;
-}}
-[data-testid="stCheckbox"] label {{
-    color: {p['text']} !important;
-}}
-/* The switch track - first div inside the label */
-[data-testid="stCheckbox"] label > div:first-child {{
-    border: 1.5px solid rgba({p['glow']}, 0.6) !important;
-    border-radius: 999px !important;
-    background-color: {p['bg']} !important;
-}}
-/* Track lights up when dark mode is on */
-[data-testid="stCheckbox"] label:has(input[aria-checked="true"]) > div:first-child {{
-    background-color: rgba({p['glow']}, 0.6) !important;
-    border-color: rgba({p['glow']}, 0.9) !important;
-}}
-
 /* Chat input - command line, glows when focused */
 [data-testid="stChatInput"] {{
-    background-color: {p['surface']};
-    border: 1px solid {p['border']};
+    background-color: transparent !important;
+    border: none !important;
     border-radius: 8px;
     transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }}
-[data-testid="stChatInput"]:focus-within {{
-    border-color: rgba({p['glow']}, 0.9);
-    box-shadow: 0 0 16px rgba({p['glow']}, 0.4);
+[data-testid="stChatInput"] > div,
+[data-testid="stChatInput"] > div > div,
+[data-testid="stChatInput"] > div > div > div,
+[data-testid="stChatInput"] textarea,
+[data-testid="stChatInput"] div[role="textbox"] {{
+    background-color: {p['surface']} !important;
+    color: {p['text']} !important;
+    border-radius: 8px !important;
+}}
+[data-testid="stChatInput"] > div {{
+    border: 1px solid {p['border']} !important;
+}}
+[data-testid="stChatInput"]:focus-within > div {{
+    border-color: rgba({p['glow']}, 0.9) !important;
+    box-shadow: 0 0 16px rgba({p['glow']}, 0.4) !important;
 }}
 [data-testid="stChatInput"] textarea {{
-    color: {p['text']};
-    background-color: {p['surface']};
-    border: none;
+    background-color: transparent !important;
+    border: none !important;
     font-family: 'Space Grotesk', sans-serif;
+}}
+[data-testid="stChatInput"] textarea::placeholder {{
+    color: {p['muted']} !important;
 }}
 
 /* Empty-state info box */
@@ -247,7 +326,35 @@ html, body {{
     font-size: 0.85rem;
 }}
 
-/* Buttons - ghost console buttons */
+/* Sidebar nav list (New Chat + Chat History) - flat rows, no borders,
+   icon + text, soft highlight on hover, persistent highlight for the
+   active chat (rendered as a "primary" button). */
+[class*="st-key-sidebar_nav"] .stButton > button {{
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    padding: 0.55rem 0.7rem !important;
+    border-radius: 8px !important;
+    font-family: 'Space Grotesk', sans-serif !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    font-size: 0.88rem !important;
+    font-weight: 400 !important;
+}}
+[class*="st-key-sidebar_nav"] .stButton > button:hover {{
+    background-color: rgba({p['glow']}, 0.14) !important;
+    box-shadow: none !important;
+    border: none !important;
+}}
+[class*="st-key-sidebar_nav"] .stButton > button[kind="primary"] {{
+    background-color: rgba({p['glow']}, 0.18) !important;
+    font-weight: 600 !important;
+    color: {p['ink']} !important;
+}}
+
+/* Buttons - ghost console buttons (theme toggle, regenerate) */
 .stButton > button {{
     font-family: 'IBM Plex Mono', monospace;
     letter-spacing: 0.04em;
@@ -280,8 +387,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-memory = SessionMemory(st.session_state)
-
 
 def render_agent_badge(label: str):
     meta = AGENT_META.get(label)
@@ -294,8 +399,37 @@ def render_agent_badge(label: str):
     )
 
 
-# --- render existing chat history ---
-history = memory.get_recent_history(n=50)
+def render_message_actions(turn: dict, idx: int, chat_id: str):
+    """Copy + Regenerate row under an assistant message."""
+    text = turn["text"]
+    query = turn.get("query")
+    label = turn.get("agent")
+
+    safe_text = json.dumps(text)  # safe JS string literal (escaped quotes/newlines)
+    with st.container(key=f"msg_actions_{chat_id}_{idx}"):
+        col1, col2, _spacer = st.columns([0.6, 0.6, 8])
+        with col1:
+            st.markdown(
+                f"<button class='msg-copy-btn' title='Copy' "
+                f"onclick='navigator.clipboard.writeText({safe_text})'>📋</button>",
+                unsafe_allow_html=True,
+            )
+        with col2:
+            if query and label and st.button("🔄", key=f"regen_{chat_id}_{idx}", help="Regenerate"):
+                fn = AGENT_META[label]["fn"]
+                history_list = memory.state["history"]
+                del history_list[idx]  # remove so the agent doesn't see its own old answer
+                new_reply = fn(query, memory)
+                history_list.insert(
+                    idx,
+                    {"role": "assistant", "text": new_reply, "agent": label, "query": query},
+                )
+                memory.set_last_agent(label)
+                st.rerun()
+
+
+# --- render chat history for the active chat ---
+history = memory.state["history"]
 if not history:
     st.info(
         "No messages yet — try one of these:\n\n"
@@ -304,7 +438,7 @@ if not history:
         "- *\"When is the assignment 2 submission due?\"* → Deadline Agent"
     )
 
-for turn in history:
+for idx, turn in enumerate(history):
     if turn["role"] == "user":
         with st.chat_message("user", avatar=USER_AVATAR):
             st.markdown(turn["text"])
@@ -314,30 +448,36 @@ for turn in history:
         with st.chat_message("assistant", avatar=avatar):
             render_agent_badge(label)
             st.markdown(turn["text"])
+            render_message_actions(turn, idx, current_chat_id)
 
 # --- handle new input ---
 user_input = st.chat_input("Ask something...")
 if user_input:
+    if memory.state.get("title") is None:
+        memory.state["title"] = (user_input[:40] + "…") if len(user_input) > 40 else user_input
+
     memory.add_turn("user", user_input)
-    with st.chat_message("user", avatar=USER_AVATAR):
-        st.markdown(user_input)
 
     label = route(user_input)
     meta = AGENT_META[label]
     memory.set_last_agent(label)
 
-    with st.chat_message("assistant", avatar=meta["icon"]):
-        with st.spinner(f"Thinking..."):
-            reply = meta["fn"](user_input, memory)
-        render_agent_badge(label)
-        st.markdown(reply)
-    memory.add_turn("assistant", reply, agent=label)
+    with st.spinner("Thinking..."):
+        reply = meta["fn"](user_input, memory)
 
-# --- sidebar: session info + theme toggle ---
+    memory.add_turn("assistant", reply, agent=label, query=user_input)
+    st.rerun()
+
+# --- sidebar: theme, session info, and multi-chat history ---
 with st.sidebar:
     st.markdown("## 🗂️ Session")
-    st.toggle("🌙 Dark mode", key="dark_mode")
-    st.write(f"Turns so far: {len(memory.state['history'])}")
+
+    dark_label = "☀️ Light Mode" if st.session_state.dark_mode else "🌙 Dark Mode"
+    if st.button(dark_label, key="theme_toggle_btn", use_container_width=True):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+        st.rerun()
+
+    st.write(f"Turns so far: {len(history)}")
 
     last_label = memory.state.get("last_agent")
     if last_label:
@@ -345,7 +485,22 @@ with st.sidebar:
         render_agent_badge(last_label)
 
     st.markdown("---")
-    if st.button("Clear session memory"):
-        for key in ("history", "last_context", "last_agent", "known_deadlines"):
-            st.session_state[key] = [] if key != "last_agent" else None
-        st.rerun()
+
+    with st.container(key="sidebar_nav"):
+        if st.button("➕  New Chat", key="new_chat_btn", use_container_width=True):
+            _create_chat()
+            st.rerun()
+
+        st.markdown("### 💬 Chat History")
+        for cid in st.session_state["chat_order"]:
+            chat = st.session_state["chats"][cid]
+            title = chat["title"] or "New chat"
+            is_current = cid == current_chat_id
+            if st.button(
+                f"💬  {title}",
+                key=f"switch_{cid}",
+                use_container_width=True,
+                type="primary" if is_current else "secondary",
+            ):
+                st.session_state["current_chat_id"] = cid
+                st.rerun()
