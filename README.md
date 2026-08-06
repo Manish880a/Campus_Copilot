@@ -1,139 +1,207 @@
 # 🎓 Campus Copilot
 
-A multi-agent Retrieval-Augmented Generation (RAG) assistant that answers questions from your college's own documents — syllabus, handbook, previous papers — and routes each query to a specialized sub-agent: **Q&A**, **Quiz Generator**, or **Deadline Tracker**. Q&A falls back to a free web search when the answer isn't in your documents. Built with a custom HUD-style light/dark UI, multi-chat history, and per-message copy/regenerate controls.
+> An AI-powered study assistant that answers questions from your college documents, quizzes you on any topic, and tracks your deadlines — all in one chat interface.
 
-**Stack:** Python · Streamlit · ChromaDB (local, free) · sentence-transformers (local embeddings, free) · Groq API (LLM) · DuckDuckGo web search (free, keyless)
+---
 
-## Why this project
+## ✨ Features
 
-Most "chatbot wrapper" projects are a single API call in a chat box. This one combines several things that are genuinely hard to get right together:
+| Feature | Description |
+|---|---|
+| 📘 **Q&A Agent** | Ask anything about your syllabus, handbook, or previous exam papers. Answers are grounded in your own documents with source citations. Falls back to a live web search if your docs don't cover it. |
+| ✏️ **Quiz Agent** | Ask to be quizzed on any topic. Get MCQs, short-answer questions, or practice tests generated on the spot. |
+| ⏰ **Deadline Agent** | Mention a due date or exam date and it's logged. Ask "what's due this week?" to get a summary. |
+| 🔀 **Smart Router** | Every message is classified automatically — no need to select a mode. The right agent picks up your question. |
+| 💬 **Multi-chat** | Multiple independent chat threads, each with its own memory, just like a real chat app. |
 
-- **A correct RAG pipeline** — chunking, embedding, vector storage, and retrieval, so answers are grounded in real documents instead of the model guessing.
-- **Multi-agent routing** — a lightweight classifier hands each query to the right specialist instead of one agent doing everything badly.
-- **Session memory** — conversation history and previously found facts persist across turns, so follow-up questions (even one-word ones) work naturally.
-- **Graceful web fallback** — when the college documents don't have an answer, Q&A rewrites the question using conversation context and searches the web instead of dead-ending, clearly labeling web-sourced answers as such.
+---
 
-## Architecture
-
-```
-data/*.pdf,*.txt
-     |
-     v
-ingest.py --(chunk + embed)--> ChromaDB (chroma_db/)
-                                    ^
-                                    | retrieve(query)
-User message --> Router agent --+
-                  |--> QA agent -------+--> (web search fallback if no doc match)
-                  |--> Quiz agent ------+--> Groq LLM --> reply
-                  |--> Deadline agent --+
-                                    |
-                        (reply + agent label + query
-                         saved to the active chat's
-                         memory via memory.py)
-```
-
-Two pipelines run in this app:
-
-- **Offline** (once, or whenever docs change): documents in `data/` → chunked → embedded locally → stored in a persistent ChromaDB collection.
-- **Online** (every chat message): user message → Router agent labels it QA / QUIZ / DEADLINE → that agent retrieves the most relevant chunks → Groq LLM generates a grounded reply (or, for Q&A with no document match, a context-aware web search fallback) → reply is saved to the active chat thread and rendered with agent-colored badges.
-
-## Features
-
-- **Three specialist agents** — Q&A, Quiz, and Deadline — each grounded strictly in your indexed documents.
-- **Web search fallback (Q&A only)** — free, keyless DuckDuckGo search, used only when your documents don't cover the question. Follow-up messages (e.g. just a city name after "what's the weather?") are rewritten into a standalone search query using conversation context before searching.
-- **Multi-chat sidebar** — start a "New Chat" at any time; past chats stay listed and clickable, each with its own independent memory (scoped to the current browser session).
-- **Copy & Regenerate** — every assistant reply has a copy-to-clipboard button and a regenerate button that re-asks the same question fresh.
-- **Light/dark HUD theme** — a custom dotted-grid, glowing console aesthetic that fully re-themes on toggle, including Streamlit's own header and sidebar chrome.
-
-## Project structure
+## 🏗️ Architecture
 
 ```
-campus-copilot/
-├── app.py                  # Streamlit UI - entry point
-├── config.py                # settings: model names, chunk size, paths
-├── ingest.py                 # builds the ChromaDB vector index from data/
-├── retriever.py              # shared ChromaDB query helper
-├── memory.py                 # per-chat session memory manager
-├── llm.py                    # Groq API call wrapper
-├── web_search.py             # free DuckDuckGo web search fallback
-├── agents/
-│   ├── router.py             # classifies query -> QA / QUIZ / DEADLINE
-│   ├── qa_agent.py           # RAG question answering + web fallback
-│   ├── quiz_agent.py         # RAG-grounded quiz generation
-│   └── deadline_agent.py     # RAG-grounded deadline lookup
-├── data/                     # put your syllabus/handbook/papers here (gitignored)
-├── chroma_db/                # auto-created persistent vector store (gitignored)
-├── requirements.txt
-├── .env.example
-└── .gitignore
+User message
+     │
+     ▼
+ Router Agent  ──── (fast, small LLM) ────► QA / QUIZ / DEADLINE
+                                                     │
+                              ┌──────────────────────┤
+                              ▼                      ▼
+                      ChromaDB (RAG)          Groq LLM API
+                      local vector DB         (main model)
+                              │
+                    ┌─────────┴─────────┐
+                    │   No answer?      │
+                    ▼                   │
+             DuckDuckGo Web Search      │
+                    │                   │
+                    └─────────┬─────────┘
+                              ▼
+                         Final reply
+                              │
+                              ▼
+                     Session Memory
+                  (per-chat history)
 ```
 
-## Prerequisites
+**Tech stack:**
 
-- Python 3.10+
-- A free Groq API key from [console.groq.com](https://console.groq.com)
-- Your college documents as PDFs or plain text files
+- **Frontend** — [Streamlit](https://streamlit.io/) with custom CSS (HUD / glassmorphism design)
+- **LLM** — [Groq](https://groq.com/) (`openai/gpt-oss-120b` for answers, `openai/gpt-oss-20b` for routing)
+- **Vector DB** — [ChromaDB](https://www.trychroma.com/) (local, persistent)
+- **Embeddings** — `all-MiniLM-L6-v2` via `sentence-transformers` (runs fully offline, no API cost)
+- **PDF parsing** — `pypdf`
+- **Web fallback** — DuckDuckGo Search (`ddgs`)
 
-## Setup
+---
+
+## 🚀 Quick Start
+
+### 1. Clone the repo
 
 ```bash
-git clone https://github.com/<your-username>/campus-copilot.git
-cd campus-copilot
+git clone https://github.com/Manish880a/Campus_Copilot.git
+cd Campus_Copilot
+```
 
+### 2. Create a virtual environment
+
+```bash
 python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-
-pip install -r requirements.txt
-
-cp .env.example .env       # then paste in your real GROQ_API_KEY
+source venv/bin/activate      # Windows: venv\Scripts\activate
 ```
 
-## Usage
+### 3. Install dependencies
 
 ```bash
-# 1. Add your documents
-cp your-syllabus.pdf your-handbook.pdf data/
+pip install -r requirements.txt
+```
 
-# 2. Build the vector index (re-run whenever documents change)
+### 4. Add your Groq API key
+
+Copy the example env file and fill in your key:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+```
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+> Get a free API key at [console.groq.com](https://console.groq.com)
+
+### 5. Add your college documents
+
+Drop your `.pdf` or `.txt` files into the `data/` folder:
+
+```
+data/
+├── syllabus.pdf
+├── student_handbook.pdf
+├── previous_papers_2024.pdf
+└── ...
+```
+
+### 6. Build the vector database
+
+Run this once (and again whenever you add or update documents):
+
+```bash
 python ingest.py
+```
 
-# 3. Launch the app
+### 7. Launch the app
+
+```bash
 streamlit run app.py
 ```
 
-Open the local URL Streamlit prints (usually `http://localhost:8501`). Try one question of each type to confirm routing:
+Open [http://localhost:8501](http://localhost:8501) in your browser.
 
-- *"What's the attendance policy in the handbook?"* → Q&A agent (from your documents)
-- *"What's the weather in your city today?"* → Q&A agent (falls back to the web, clearly labeled)
-- *"Quiz me on chapter 3"* → Quiz agent
-- *"When is the assignment 2 submission due?"* → Deadline agent
+---
 
-## How it stays reliable
+## 💬 Usage Examples
 
-1. **Routing logic stays decoupled from answering logic** — the router only ever returns one of three labels and never touches document context, so a routing bug can't corrupt an answer.
-2. **RAG correctness comes from grounding, not model size** — every agent is instructed to answer only from retrieved chunks (or, for Q&A's fallback, only from web results) and say plainly when something isn't found.
-3. **Memory is additive, not load-bearing** — the pipeline works correctly on a single turn even with empty memory; memory only adds continuity on top.
-4. **Web search is scoped to Q&A only** — Quiz and Deadline stay strictly document-grounded, since a quiz question or a deadline pulled from a random web result would defeat the point.
-
-## Troubleshooting
-
-| Issue | Fix |
+| What you type | Which agent handles it |
 |---|---|
-| `TypeError: Client.__init__() got an unexpected keyword argument 'proxies'` | Your `groq` package is outdated relative to `httpx`. Run `pip install --upgrade groq`. |
-| "Collection does not exist" | Run `python ingest.py` before `streamlit run app.py`. |
-| Router picks the wrong agent | Tighten the label list in `router.py`'s system prompt (temperature is already 0). |
-| Answers ignore your documents | Check `data/` actually has files before ingesting; check `CHUNK_SIZE` isn't cutting key info awkwardly. |
-| Web fallback loses context on follow-ups | Make sure you're on the current `qa_agent.py` — it rewrites short follow-ups into standalone search queries before searching. |
-| Slow first run | `sentence-transformers` downloads the embedding model once; later runs are fast and offline. |
+| `"What's the attendance policy?"` | 📘 Q&A Agent |
+| `"Explain DBMS normalization"` | 📘 Q&A Agent |
+| `"Quiz me on OS scheduling algorithms"` | ✏️ Quiz Agent |
+| `"Give me 5 MCQs on data structures"` | ✏️ Quiz Agent |
+| `"Assignment 2 is due on 15th August"` | ⏰ Deadline Agent |
+| `"What deadlines do I have this week?"` | ⏰ Deadline Agent |
 
-## Extension ideas
+---
 
-- Persist chat history to disk (SQLite) so it survives a browser refresh, not just a session
-- Add a thumbs-up/down feedback control per answer to track which agent underperforms
-- Add a 4th agent for campus events or a contact directory
-- Swap the character-based chunker for a sentence-aware splitter (e.g. via `tiktoken`)
-- Deploy on Streamlit Community Cloud (free)
+## 📁 Project Structure
 
-## License
+```
+Campus_Copilot/
+├── app.py              # Streamlit UI — main entry point
+├── memory.py           # Per-chat session memory manager
+├── config.py           # All settings (models, chunk sizes, paths)
+├── ingest.py           # PDF/TXT → ChromaDB indexing pipeline
+├── retriever.py        # ChromaDB vector search wrapper
+├── llm.py              # Groq API wrapper
+├── web_search.py       # DuckDuckGo search fallback
+├── agents/
+│   ├── router.py       # Classifies queries → QA / QUIZ / DEADLINE
+│   ├── qa_agent.py     # RAG-based Q&A + web fallback
+│   ├── quiz_agent.py   # Quiz / MCQ generator
+│   └── deadline_agent.py # Deadline tracker
+├── data/               # ← Put your PDFs/TXTs here
+├── .streamlit/
+│   └── config.toml     # Streamlit theme config
+├── .env.example        # Template for environment variables
+└── requirements.txt
+```
 
-MIT — see [LICENSE](LICENSE).
+---
+
+## ⚙️ Configuration
+
+All settings are in [`config.py`](config.py):
+
+| Setting | Default | Description |
+|---|---|---|
+| `LLM_MODEL` | `openai/gpt-oss-120b` | Main answering model |
+| `ROUTER_MODEL` | `openai/gpt-oss-20b` | Fast routing/rewrite model |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Local embedding model |
+| `CHUNK_SIZE` | `800` | Characters per document chunk |
+| `CHUNK_OVERLAP` | `150` | Overlap between chunks |
+| `TOP_K_RESULTS` | `4` | Chunks retrieved per query |
+| `CHROMA_PERSIST_DIR` | `chroma_db` | Vector DB storage path |
+| `DATA_DIR` | `data` | Folder for source documents |
+
+---
+
+## 🔄 Re-indexing Documents
+
+Whenever you add, remove, or update files in `data/`, re-run:
+
+```bash
+python ingest.py
+```
+
+This rebuilds the vector database from scratch — no duplicates.
+
+---
+
+## 🛠️ Requirements
+
+- Python **3.10+**
+- A free [Groq API key](https://console.groq.com)
+- Your college documents in `.pdf` or `.txt` format
+
+---
+
+## 📄 License
+
+MIT — free to use, modify, and distribute.
+
+---
+
+<div align="center">
+  Built for students, by a student 🎓
+</div>
